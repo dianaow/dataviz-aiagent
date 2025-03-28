@@ -191,9 +191,11 @@ def register_callbacks(app):
 
         try:
             df = pd.read_json(json_data, orient='split')
-            column_rename_map = {item['old_column']: item['new_column'] for item in column_matches['required']}
-            df.rename(columns=column_rename_map, inplace=True)
-            print(df.head())
+            column_rename_map_required = {item['old_column']: item['new_column'] for item in column_matches['required']}
+            column_rename_map_optional = {item['old_column']: item['new_column'] for item in column_matches['optional']}
+            df.rename(columns=column_rename_map_required, inplace=True)
+            df.rename(columns=column_rename_map_optional, inplace=True)
+            print(df.columns)
             print(f"Column matches: {column_matches}")
             print(f"DataFrame shape: {df.shape}")
             print(f"DataFrame columns: {df.columns.tolist()}")
