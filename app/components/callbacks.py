@@ -159,6 +159,7 @@ def register_callbacks(app):
         [
             Output("plot-type-dropdown", "options"),
             Output("plot-type-dropdown", "disabled"),
+            Output("plot-type-dropdown", "value"),
         ],
         [Input("confirm-classification", "n_clicks")],
         [State("data-type", "data")]
@@ -167,7 +168,10 @@ def register_callbacks(app):
         if n_clicks is None:
             return dash.no_update
         
-        return get_plot_options(data_type), False
+        options = get_plot_options(data_type)
+        default_value = options[0]["value"] if options else None
+        
+        return options, False, default_value
 
     # Callback for plot type selection
     @app.callback(

@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 import json
-from openai import OpenAI
+import google.generativeai as genai
 from dotenv import load_dotenv
 from dash import html, dcc
 import dash_bootstrap_components as dbc
@@ -11,12 +11,11 @@ from jsonschema import validate, ValidationError
 # Load environment variables
 load_dotenv()
 
-print(os.getenv("OPENAI_API_KEY"))
-# Set up OpenAI client
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    base_url="https://api.openai.com/v1"
-)
+# Configure Gemini
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+
+# Initialize Gemini model
+model = genai.GenerativeModel('gemini-pro')
 
 # Define the supported data types
 SUPPORTED_DATA_TYPES = [
@@ -129,74 +128,31 @@ def analyze_column_matches(df, data_type):
                 "sample_values": sample_values
             })
         
-        functions = [
-          {
-              "name": "column_mapping_response",
-              "description": f"""You are an expert in data analysis and column mapping.
-              Your task is to analyze the provided columns and match them with the expected patterns for {data_type}.
-              For each column, determine if it matches any of the required or optional patterns.
- 
-              Respond with a JSON object containing:
-              - required: list of matched required columns with confidence scores.
-              - optional: list of matched optional columns with confidence scores
-              - missing: list of required patterns that weren't matched
-              - confidence: overall confidence score (0-1)
+        # Prepare the prompt for Gemini
+        prompt = f"""You are an expert in data analysis and column mapping.
+        Your task is to analyze the provided columns and match them with the expected patterns for {data_type}.
+        For each column, determine if it matches any of the required or optional patterns.
 
-              Expected patterns for {data_type}:
-              Required: {COLUMN_PATTERNS[data_type]['required']}
-              Optional: {COLUMN_PATTERNS[data_type]['optional']}
+        Column information: {json.dumps(column_summary, indent=2)}
 
-              Store the original column name and the matched column name.
-              """,
-                      "parameters": {
-                          "type": "object",
-                          "properties": {
-                              "required": {
-                                  "type": "array",
-                                  "items": {
-                                      "type": "object",
-                                      "properties": {
-                                          "old_column": {"type": "string"},
-                                          "new_column": {"type": "string"},
-                                          "confidence": {"type": "number"}
-                                      },
-                                      "required": ["old_name", "new_column", "confidence"]
-                                  }
-                              },
-                              "optional": {
-                                  "type": "array",
-                                  "items": {
-                                      "type": "object",
-                                      "properties": {
-                                          "old_column": {"type": "string"},
-                                          "new_column": {"type": "string"},
-                                          "confidence": {"type": "number"}
-                                      },
-                                      "required": ["old_name", "new_column", "confidence"]
-                                  }
-                              },
-                              "missing": {
-                                  "type": "array",
-                                  "items": {"type": "string"}
-                              },
-                              "confidence": {"type": "number"}
-                          },
-                          "required": ["required", "optional", "missing", "confidence"]
-                      }
-                  }
-              ]
+        Expected patterns for {data_type}:
+        Required: {COLUMN_PATTERNS[data_type]['required']}
+        Optional: {COLUMN_PATTERNS[data_type]['optional']}
 
-        # Call the OpenAI API
-        response = client.chat.completions.create(
-            model="gpt-4",
-            functions=functions,
-            function_call={"name": "column_mapping_response"},
-            temperature=0.3,
-            max_tokens=500
-        )
+        Respond with a JSON object containing:
+        - required: list of matched required columns with confidence scores
+        - optional: list of matched optional columns with confidence scores
+        - missing: list of required patterns that weren't matched
+        - confidence: overall confidence score (0-1)
+
+        Format each match as: {{"old_column": "original_name", "new_column": "matched_name", "confidence": 0.X}}
+        """
+        
+        # Call Gemini API
+        response = model.generate_content(prompt)
         
         # Parse the response
-        result = json.loads(response.choices[0].message.content)
+        result = json.loads(response.text)
         
         # Validate and structure the matches
         matches["required"] = result.get("required", [])
@@ -224,7 +180,7 @@ def classify_data(df, user_hint=None, filename=None):
                 return data_type, 0.95, matches, False
     
     # Check if API key is available
-    if not os.getenv("OPENAI_API_KEY"):
+    if not os.getenv("GOOGLE_API_KEY"):
         # Fallback to rule-based classification if no API key
         data_type = rule_based_classification(df, filename)
         matches = analyze_column_matches(df, data_type)
@@ -241,41 +197,25 @@ def classify_data(df, user_hint=None, filename=None):
                 data_sample[col] = data_sample[col].dt.strftime('%Y-%m-%d %H:%M:%S')
         data_sample = data_sample.head(5).to_dict(orient='records')
         
-        # Build the messages for the LLM
-        messages = [
-            {
-                "role": "system",
-                "content": f"""You are an expert in materials science and metrology data. 
-                Your task is to classify the type of experimental data provided based on the column names, data patterns, and sample values.
-                The supported data types are: {', '.join(SUPPORTED_DATA_TYPES)}.
-                If you cannot determine the type with confidence, classify it as 'Other'.
-                Respond with ONLY the data type and a confidence level (0-1) in JSON format: {{"data_type": "TYPE", "confidence": 0.X}}"""
-            },
-            {
-                "role": "user",
-                "content": f"""Here is the information about the data:
-                File name: {filename if filename else 'Not provided'}
-                Column information: {json.dumps(column_analysis, indent=2)}
-                Data sample: {json.dumps(data_sample, indent=2)}
-                
-                Please classify this data into one of the following types: {', '.join(SUPPORTED_DATA_TYPES)}."""
-            }
-        ]
+        # Prepare the prompt for Gemini
+        prompt = f"""You are an expert in materials science and metrology data. 
+        Your task is to classify the type of experimental data provided based on the column names, data patterns, and sample values.
         
-        # Call the OpenAI API using the new format
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-            temperature=0.3,
-            max_tokens=150
-        )
+        File name: {filename if filename else 'Not provided'}
+        Column information: {json.dumps(column_analysis, indent=2)}
+        Data sample: {json.dumps(data_sample, indent=2)}
         
-        # Extract the response
-        result_text = response.choices[0].message.content.strip()
+        The supported data types are: {', '.join(SUPPORTED_DATA_TYPES)}.
+        If you cannot determine the type with confidence, classify it as 'Other'.
+        
+        Respond with ONLY the data type and a confidence level (0-1) in JSON format: {{"data_type": "TYPE", "confidence": 0.X}}"""
+        
+        # Call Gemini API
+        response = model.generate_content(prompt)
         
         try:
             # Parse the JSON response
-            result = json.loads(result_text)
+            result = json.loads(response.text)
             data_type = result.get("data_type", "Other")
             confidence = result.get("confidence", 0.5)
             
@@ -391,35 +331,23 @@ def process_user_feedback(feedback, current_matches, data_type):
             "user_feedback": feedback
         }
         
-        # Build the messages for the LLM
-        messages = [
-            {
-                "role": "system",
-                "content": """
-                Your task is to process user feedback about data classification, column matches and suggest corrections.
-                If the user indicates a specific  data type or column should be used, update the matches accordingly.
-                Respond with a JSON object containing:
-                - updated_data_type: updated data type
-                - updated_matches: list of updated column matches
-                - explanation: explanation of the changes made
-                - needs_confirmation: boolean indicating if further confirmation is needed"""
-            },
-            {
-                "role": "user",
-                "content": f"Current state: {json.dumps(current_state, indent=2)}"
-            }
-        ]
+        # Prepare the prompt for Gemini
+        prompt = f"""Your task is to process user feedback about data classification, column matches and suggest corrections.
+        If the user indicates a specific data type or column should be used, update the matches accordingly.
         
-        # Call the OpenAI API
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=messages,
-            temperature=0.3,
-            max_tokens=500
-        )
+        Current state: {json.dumps(current_state, indent=2)}
+        
+        Respond with a JSON object containing:
+        - updated_data_type: updated data type
+        - updated_matches: list of updated column matches
+        - explanation: explanation of the changes made
+        - needs_confirmation: boolean indicating if further confirmation is needed"""
+        
+        # Call Gemini API
+        response = model.generate_content(prompt)
         
         # Parse the response
-        result = json.loads(response.choices[0].message.content)
+        result = json.loads(response.text)
         
         return {
             "updated_data_type": result.get("updated_data_type", data_type),
