@@ -12,8 +12,8 @@ import dash_html_components as html
 
 from app.utils.data_processor import process_data, parse_contents
 from app.utils.llm_classifier import classify_data, create_column_confirmation_dialog, process_user_feedback
-from app.utils.visualization import generate_visualizations
-from app.utils.analysis import analyze_data
+from app.utils.visualization import generate_llm_visualizations
+from app.utils.analysis import analyze_data, generate_llm_analysis
 
 
 def register_callbacks(app):
@@ -50,7 +50,6 @@ def register_callbacks(app):
             Output("data-classification-output", "children"),
             Output("chat-history", "data"),
             Output("data-type", "data"),
-            Output("data-summary", "children"),
             Output("column-matches", "data")
         ],
         [Input("process-button", "n_clicks")],
@@ -66,7 +65,6 @@ def register_callbacks(app):
                 html.P("Upload and process data to see classification results", className="text-muted"),
                 [],
                 [],
-                None,
                 [],
             )
         
@@ -75,10 +73,7 @@ def register_callbacks(app):
         
         # Classify the data type using the LLM
         data_type, confidence, column_matches, needs_confirmation = classify_data(df, data_type_hint, filename)
-        
-        # Generate data summary
-        data_summary = generate_data_summary(df, data_type)
-        
+         
         # Initialize chat history with the classification results
         current_time = pd.Timestamp.now().strftime("%H:%M:%S")
         chat_history = [{
@@ -91,15 +86,13 @@ def register_callbacks(app):
         classification_output = create_column_confirmation_dialog(
             column_matches, 
             data_type, 
-            chat_history,
-            data_summary
+            chat_history
         )
-        print(f"Data summary: {data_summary}")
+
         return (
             classification_output,
             chat_history,
             data_type,
-            data_summary,
             column_matches
         )
     
@@ -116,12 +109,11 @@ def register_callbacks(app):
             State("user-feedback-input", "value"),
             State("data-type", "data"),
             State("column-matches", "data"),
-            State("chat-history", "data"),
-            State("data-summary", "children"),
+            State("chat-history", "data")
         ],
         prevent_initial_call=True
     )
-    def handle_user_feedback(n_clicks, feedback, data_type, column_matches, chat_history, data_summary):
+    def handle_user_feedback(n_clicks, feedback, data_type, column_matches, chat_history):
         if n_clicks is None or not feedback:
             return dash.no_update
         
@@ -148,8 +140,7 @@ def register_callbacks(app):
         dialog = create_column_confirmation_dialog(
             result["updated_matches"], 
             data_type, 
-            chat_history,
-            data_summary
+            chat_history
         )
         
         return dialog, chat_history, result["updated_data_type"], result["updated_matches"]
@@ -173,51 +164,66 @@ def register_callbacks(app):
         
         return options, False, default_value
 
-    # Callback for plot type selection
+    # Callback for visualization generation
     @app.callback(
-        Output("primary-visualization", "figure"),
-        [Input("plot-type-dropdown", "value")],
-        [State("processed-data", "data"), State("data-type", "data"), State("column-matches", "data")]
+        Output("visualization-container", "children"),
+        [Input("confirm-classification", "n_clicks")],
+        [
+            State("processed-data", "data"), 
+            State("data-type", "data"), 
+            State("column-matches", "data")
+        ],
+        prevent_initial_call=True
     )
-    def update_visualizations(plot_type, json_data, data_type, column_matches):
-        print(f"Column matches: {column_matches}")
-        print(f"Visualization callback triggered with plot_type: {plot_type}")
-        print(f"Data type: {data_type}")
-        print(f"JSON data available: {json_data is not None}")
+    def update_visualizations(n_clicks, json_data, data_type, column_matches):
+        """Update visualizations based on data."""
+        if n_clicks is None:
+            return dash.no_update
 
-        # Prevent callback execution on initial load
-        if dash.ctx.triggered_id is None:
-            return dash.no_update  # This prevents unnecessary updates
-
-        if not plot_type or not json_data or not data_type:
-            print("Missing required data for visualization")
-            return dash.no_update  # Do not update the plot if required inputs are missing
-
+        if not json_data or not data_type:
+            return [html.P("Process data to see analysis results", className="text-muted")]
+        
         try:
+            # Convert JSON data to DataFrame
             df = pd.read_json(json_data, orient='split')
-            column_rename_map_required = {item['old_column']: item['new_column'] for item in column_matches['required']}
-            column_rename_map_optional = {item['old_column']: item['new_column'] for item in column_matches['optional']}
-            df.rename(columns=column_rename_map_required, inplace=True)
-            df.rename(columns=column_rename_map_optional, inplace=True)
-            print(df.columns)
-            print(f"Column matches: {column_matches}")
-            print(f"DataFrame shape: {df.shape}")
-            print(f"DataFrame columns: {df.columns.tolist()}")
             
-            # Get the primary and secondary figures
-            primary_fig, secondary_fig = generate_visualizations(df, data_type, plot_type)
-            print("Generated visualizations successfully")
-
-            return primary_fig
+            # Rename columns based on matches
+            for match in column_matches.get("required", []):
+                if "old_column" in match and "new_column" in match:
+                    df = df.rename(columns={match["old_column"]: match["new_column"]})
+            
+            # Log DataFrame info for debugging
+            print(f"DataFrame columns: {df.columns.tolist()}")
+            print(f"DataFrame shape: {df.shape}")
+            
+            # Generate all visualizations using LLM
+            figures = generate_llm_visualizations(df, data_type)
+            
+            # Create a container for all figures with fixed height and scrolling
+            visualization_container = html.Div([
+                dcc.Graph(
+                    figure=fig,
+                    style={'height': '700px', 'margin-bottom': '20px'}
+                ) for fig in figures
+            ], style={
+                'height': '700px',  # Fixed height for the container
+                'overflow-y': 'auto',  # Enable vertical scrolling
+                'padding': '20px'
+            })
+            
+            return visualization_container
             
         except Exception as e:
-            print(f"Error generating visualizations: {str(e)}")
-            return {}
+            print(f"Error in visualization generation: {e}")
+            return []
 
     @app.callback(
         [Output("analysis-results", "children")],
         [Input("confirm-classification", "n_clicks")],
-        [State("processed-data", "data"), State("data-type", "data")],
+        [
+            State("processed-data", "data"), 
+            State("data-type", "data")
+        ],
     )
     def update_analysis_results(n_clicks, json_data, data_type):
         if n_clicks is None:
@@ -226,94 +232,51 @@ def register_callbacks(app):
         if not json_data or not data_type:
             return [html.P("Process data to see analysis results", className="text-muted")]
         
-        df = pd.read_json(json_data, orient='split')
-        
-        # Unpack both insights and analysis_data
-        insights, analysis_data = analyze_data(df, data_type)
-        
-        # Create a layout that shows both insights and a detailed analysis data table
-        analysis_layout = html.Div([
-            insights,  # This will display the HTML insights from the function
+        try:
+            # Convert JSON data to DataFrame
+            df = pd.read_json(json_data, orient='split')
             
-            # Optional: Add a table to show the detailed analysis data
-            html.H5("Detailed Analysis Data"),
-            # dash_table.DataTable(
-            #     id='analysis-data-table',
-            #     columns=[{"name": str(k), "id": str(k)} for k in analysis_data.keys()],
-            #     data=[analysis_data],
-            #     style_table={'overflowX': 'auto'},
-            #     style_cell={
-            #         'textAlign': 'left',
-            #         'padding': '5px',
-            #         'backgroundColor': 'rgb(250, 250, 250)',
-            #         'color': 'black'
-            #     },
-            #     style_header={
-            #         'backgroundColor': 'rgb(230, 230, 230)',
-            #         'fontWeight': 'bold'
-            #     }
-            # )
-        ])
-        
-        return [analysis_layout]
-
-    def generate_data_summary(df, data_type):
-        """Generate a summary of the uploaded data based on its type."""
-        summary_items = []
-        
-        # Basic data summary
-        summary_items.append(html.P(f"Number of rows: {len(df)}"))
-        summary_items.append(html.P(f"Number of columns: {len(df.columns)}"))
-        
-        # Add columns preview
-        #summary_items.append(html.P("Columns:"))
-        #summary_items.append(html.Ul([html.Li(col) for col in df.columns]))
-        
-        # Add type-specific summaries
-        if data_type == "Battery Cycling Data":
-            # For battery data, show cycle count, capacity range, etc.
-            cycle_col = next((col for col in df.columns if 'cycle' in col.lower()), None)
-            capacity_col = next((col for col in df.columns if 'capacity' in col.lower()), None)
+            # Generate analysis using LLM
+            insights_layout, analysis_data = generate_llm_analysis(df, data_type)
             
-            if cycle_col and cycle_col in df.columns:
-                cycles = df[cycle_col].nunique()
-                summary_items.append(html.P(f"Total cycles: {cycles}"))
-            
-            if capacity_col and capacity_col in df.columns:
-                min_cap = df[capacity_col].min()
-                max_cap = df[capacity_col].max()
-                summary_items.append(html.P(f"Capacity range: {min_cap:.2f} - {max_cap:.2f}"))
-        
-        elif data_type == "X-ray Diffraction":
-            # For XRD data, show 2-theta range, intensity range, etc.
-            angle_col = next((col for col in df.columns if 'theta' in col.lower() or '2theta' in col.lower() 
-                            or 'angle' in col.lower()), df.columns[0])
-            intensity_col = next((col for col in df.columns if 'intensity' in col.lower() 
-                                or 'counts' in col.lower()), df.columns[1])
-            
-            if angle_col in df.columns and intensity_col in df.columns:
-                min_angle = df[angle_col].min()
-                max_angle = df[angle_col].max()
-                max_intensity = df[intensity_col].max()
+            # Create a layout that shows insights and analysis data
+            analysis_layout = html.Div([
+                insights_layout,
                 
-                summary_items.append(html.P(f"Angle range: {min_angle:.2f}° - {max_angle:.2f}°"))
-                summary_items.append(html.P(f"Max intensity: {max_intensity:.0f} counts"))
-        
-        elif data_type == "Raman Spectroscopy":
-            # For Raman data, show wavenumber range, etc.
-            wavenumber_col = next((col for col in df.columns if 'wave' in col.lower() 
-                                  or 'raman' in col.lower() or 'shift' in col.lower()), df.columns[0])
-            intensity_col = next((col for col in df.columns if 'intensity' in col.lower() 
-                                or 'counts' in col.lower()), df.columns[1])
+                # Add detailed analysis data if available
+                html.Div([
+                    html.H5("Detailed Analysis Data", className="mt-4 mb-3"),
+                    html.Div([
+                        html.Div([
+                            html.H6("Key Metrics", className="mb-3"),
+                            html.Div([
+                                html.Div([
+                                    html.Strong(f"{metric}: "),
+                                    str(value)
+                                ]) for metric, value in analysis_data.get("key_metrics", {}).items()
+                            ])
+                        ], className="card mb-3 p-3"),
+                        html.Div([
+                            html.H6("Trends", className="mb-3"),
+                            html.Div([
+                                html.Div([
+                                    html.Strong(trend["name"]), html.Br(),
+                                    html.P(trend["description"], className="mb-1"),
+                                    html.Small(f"Direction: {trend['direction']}, Magnitude: {trend['magnitude']}", 
+                                             className="text-muted")
+                                ], className="mb-3")
+                                for trend in analysis_data.get("trends", [])
+                            ])
+                        ], className="card p-3")
+                    ])
+                ]) if analysis_data else None
+            ])
             
-            if wavenumber_col in df.columns and intensity_col in df.columns:
-                min_wave = df[wavenumber_col].min()
-                max_wave = df[wavenumber_col].max()
-                
-                summary_items.append(html.P(f"Wavenumber range: {min_wave:.0f} - {max_wave:.0f} cm⁻¹"))
-        
-        return summary_items
-
+            return [analysis_layout]
+            
+        except Exception as e:
+            print(f"Error in analysis generation: {e}")
+            return [html.P("Error generating analysis results", className="text-danger")]
 
 def get_plot_options(data_type):
     """Get plot options based on data type."""

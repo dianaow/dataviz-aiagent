@@ -15,7 +15,7 @@ load_dotenv()
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
 # Initialize Gemini model
-model = genai.GenerativeModel('gemini-pro')
+model = genai.GenerativeModel('gemini-2.0-flash')
 
 # Define the supported data types
 SUPPORTED_DATA_TYPES = [
@@ -120,7 +120,10 @@ def analyze_column_matches(df, data_type):
         for col in df.columns:
             # Get data type and sample values
             dtype = str(df[col].dtype)
-            sample_values = df[col].dropna().head(3).tolist()
+            # Convert timestamp values to strings if present
+            sample_values = df[col].dropna().head(3).apply(
+                lambda x: x.strftime('%Y-%m-%d %H:%M:%S') if pd.api.types.is_datetime64_any_dtype(df[col]) else x
+            ).tolist()
             
             column_summary.append({
                 "name": col,
@@ -249,7 +252,7 @@ def classify_data(df, user_hint=None, filename=None):
         matches = analyze_column_matches(df, data_type)
         return data_type, 0.5, matches, True
 
-def create_column_confirmation_dialog(matches, data_type, chat_history=None, data_summary=None):
+def create_column_confirmation_dialog(matches, data_type, chat_history=None):
     """Create a chatbot-style dialog component for column confirmation."""
     if chat_history is None:
         chat_history = []

@@ -71,50 +71,51 @@ def create_layout():
                 dbc.Card([
                     dbc.CardHeader("Results"),
                     dbc.CardBody([
-                        dbc.Row([
-                            # Plot Type Dropdown
-                            dbc.Col([
-                                html.Label("Plot Type"),
-                                dcc.Dropdown(
-                                    id="plot-type-dropdown",
-                                    options=[],  # Will be populated dynamically
-                                    placeholder="Select a plot type",
-                                    disabled=True,
-                                    style={"width": "100%"},  
-                                    className="mb-4"
-                                )
-                            ], width=4),
-                        ]),
+                        # dbc.Row([
+                        #     # Plot Type Dropdown
+                        #     dbc.Col([
+                        #         html.Label("Plot Type"),
+                        #         dcc.Dropdown(
+                        #             id="plot-type-dropdown",
+                        #             options=[],  # Will be populated dynamically
+                        #             placeholder="Select a plot type",
+                        #             disabled=True,
+                        #             style={"width": "100%"},  
+                        #             className="mb-4"
+                        #         )
+                        #     ], width=4),
+                        # ]),
                         
                         # Visualization Tabs
                         dbc.Tabs([
                             dbc.Tab(
                                 dcc.Loading(
-                                    dcc.Graph(id="primary-visualization", style={"height": "500px"}),
+                                    html.Div(id="visualization-container", style={"height": "700px"}),
                                     type="circle"
                                 ),
-                                label="Primary Plot"
+                                label="Visualizations"
                             ),
+                            # dbc.Tab(
+                            #     dcc.Loading(
+                            #         dcc.Graph(id="primary-visualization", style={"height": "700px"}),
+                            #         type="circle"
+                            #     ),
+                            #     label="Primary Plot"
+                            # ),
                             dbc.Tab(
                                 dcc.Loading(
-                                    html.Div(id="analysis-results", style={"height": "500px"}),
+                                    html.Div(id="analysis-results", style={"height": "700px", "overflow": "scroll"}),
                                     type="circle"
                                 ),
                                 label="Analysis"
                             ),
                             dbc.Tab(
                                 dcc.Loading(
-                                    html.Div(id="comparison-results", style={"height": "500px"}),
+                                    html.Div(id="comparison-results", style={"height": "700px", "overflow": "scroll"}),
                                     type="circle"
                                 ),
                                 label="Comparison"
                             )
-                        ]),
-
-                        # Data Summary
-                        html.Div([
-                            html.Strong("Data Summary:", className="mb-2"),
-                            html.Div(id="data-summary")
                         ])
                     ])
                 ])

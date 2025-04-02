@@ -3,7 +3,20 @@ import pandas as pd
 from scipy.signal import find_peaks
 from scipy import optimize
 from dash import html
+import google.generativeai as genai
+import json
+import os
+from dotenv import load_dotenv
+import dash.html as html
 
+# Load environment variables
+load_dotenv()
+
+# Configure Gemini
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+
+# Initialize Gemini model
+model = genai.GenerativeModel('gemini-2.0-flash')
 
 def analyze_data(df, data_type):
     """
@@ -453,3 +466,219 @@ def analyze_generic_data(df):
             ]
     
     return html.Div(insights), analysis_data 
+
+def generate_llm_analysis(df, data_type, error_message=None):
+    """
+    Generate data analysis using LLM with fallback to basic analysis.
+    
+    Args:
+        df (pd.DataFrame): The data to analyze
+        data_type (str): The type of data (e.g., "Battery Cycling Data")
+        error_message (str, optional): Error message from previous attempt
+        
+    Returns:
+        tuple: (insights_layout, analysis_data)
+    """
+    try:
+        # Prepare data summary for LLM
+        column_summary = []
+        for col in df.columns:
+            dtype = str(df[col].dtype)
+            if pd.api.types.is_numeric_dtype(df[col]):
+                stats = {
+                    "min": float(df[col].min()),
+                    "max": float(df[col].max()),
+                    "mean": float(df[col].mean()),
+                    "std": float(df[col].std()),
+                    "unique_values": int(df[col].nunique())
+                }
+            elif pd.api.types.is_datetime64_any_dtype(df[col]):
+                stats = {
+                    "min": df[col].min().strftime('%Y-%m-%d %H:%M:%S'),
+                    "max": df[col].max().strftime('%Y-%m-%d %H:%M:%S'),
+                    "unique_values": int(df[col].nunique())
+                }
+            else:
+                stats = {
+                    "unique_values": int(df[col].nunique()),
+                    "sample_values": df[col].dropna().head(3).astype(str).tolist()
+                }
+            
+            column_summary.append({
+                "name": col,
+                "type": dtype,
+                "stats": stats
+            })
+        
+        # Prepare the prompt for Gemini
+        prompt = f"""You are an expert in materials science data analysis.
+        Analyze the provided data and generate insights based on the data type: {data_type}
+
+        Data Summary:
+        {json.dumps(column_summary, indent=2)}
+
+        {f'Previous error: {error_message}' if error_message else ''}
+
+        Generate a comprehensive analysis that includes:
+        1. Key statistical insights
+        2. Notable patterns or trends
+        3. Potential anomalies or outliers
+        4. Recommendations for further analysis
+
+        IMPORTANT: Respond with ONLY a JSON object containing the analysis.
+        Do not include any other text or explanations.
+
+        The response should be in this exact format:
+        {{
+            "insights": [
+                {{
+                    "type": "statistical|pattern|anomaly|recommendation",
+                    "title": "Brief title of the insight",
+                    "description": "Detailed description",
+                    "value": "Quantitative value if applicable",
+                    "confidence": 0.0-1.0
+                }}
+            ],
+            "analysis_data": {{
+                "key_metrics": {{
+                    "metric_name": "value"
+                }},
+                "trends": [
+                    {{
+                        "name": "trend_name",
+                        "description": "trend_description",
+                        "direction": "increasing|decreasing|stable",
+                        "magnitude": "value"
+                    }}
+                ]
+            }}
+        }}
+
+        Focus on insights relevant to {data_type} analysis.
+        """
+        
+        # Call Gemini API
+        response = model.generate_content(prompt)
+        
+        # Print the raw response for debugging
+        print("Raw LLM response:", response.text)
+        
+        try:
+            # Clean the response text to ensure it's valid JSON
+            response_text = response.text.strip()
+            # Remove any markdown code block markers if present
+            if response_text.startswith('```json'):
+                response_text = response_text[7:]
+            if response_text.endswith('```'):
+                response_text = response_text[:-3]
+            response_text = response_text.strip()
+            
+            # Parse the response
+            result = json.loads(response_text)
+            
+            # Validate the result structure
+            if not isinstance(result, dict):
+                raise ValueError("Response is not a JSON object")
+            if "insights" not in result:
+                raise ValueError("Response missing required 'insights' key")
+            if "analysis_data" not in result:
+                raise ValueError("Response missing required 'analysis_data' key")
+            
+            # Create HTML layout for insights
+            insights_layout = html.Div([
+                html.H4("Data Analysis Insights", className="mb-4"),
+                html.Div([
+                    html.Div([
+                        html.H5(insight["title"], className="mb-2"),
+                        html.P(insight["description"], className="mb-2"),
+                        html.Div([
+                            html.Strong("Value: "), insight.get("value", "N/A"),
+                            html.Br(),
+                            html.Strong("Confidence: "), f"{insight.get('confidence', 0):.0%}"
+                        ], className="text-muted")
+                    ], className="card mb-3 p-3")
+                    for insight in result.get("insights", [])
+                ])
+            ])
+            
+            return insights_layout, result.get("analysis_data", {})
+            
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            print(f"Error parsing LLM response: {e}")
+            print("Cleaned response text:", response_text)
+            if not error_message:  # Only retry once
+                return generate_llm_analysis(df, data_type, str(e))
+            else:
+                # Fallback to basic analysis
+                return generate_basic_analysis(df)
+                
+    except Exception as e:
+        print(f"Error in LLM analysis: {e}")
+        if not error_message:  # Only retry once
+            return generate_llm_analysis(df, data_type, str(e))
+        else:
+            # Fallback to basic analysis
+            return generate_basic_analysis(df)
+
+def generate_basic_analysis(df):
+    """Generate a basic analysis when LLM analysis fails."""
+    # Calculate basic statistics for numeric columns
+    numeric_stats = {}
+    for col in df.select_dtypes(include=[np.number]).columns:
+        numeric_stats[col] = {
+            "mean": float(df[col].mean()),
+            "std": float(df[col].std()),
+            "min": float(df[col].min()),
+            "max": float(df[col].max())
+        }
+    
+    # Create basic insights
+    insights = [
+        {
+            "type": "statistical",
+            "title": "Dataset Overview",
+            "description": f"Dataset contains {len(df)} rows and {len(df.columns)} columns",
+            "value": f"{len(df)} rows × {len(df.columns)} columns",
+            "confidence": 1.0
+        }
+    ]
+    
+    # Add numeric column statistics
+    for col, stats in numeric_stats.items():
+        insights.append({
+            "type": "statistical",
+            "title": f"{col} Statistics",
+            "description": f"Basic statistics for {col}",
+            "value": f"Mean: {stats['mean']:.2f}, Std: {stats['std']:.2f}",
+            "confidence": 1.0
+        })
+    
+    # Create HTML layout for insights
+    insights_layout = html.Div([
+        html.H4("Basic Data Analysis", className="mb-4"),
+        html.P("Showing basic statistical analysis of the data."),
+        html.Div([
+            html.Div([
+                html.H5(insight["title"], className="mb-2"),
+                html.P(insight["description"], className="mb-2"),
+                html.Div([
+                    html.Strong("Value: "), insight.get("value", "N/A"),
+                    html.Br(),
+                    html.Strong("Confidence: "), f"{insight.get('confidence', 0):.0%}"
+                ], className="text-muted")
+            ], className="card mb-3 p-3")
+            for insight in insights
+        ])
+    ])
+    
+    # Create basic analysis data
+    analysis_data = {
+        "key_metrics": {
+            "total_rows": len(df),
+            "total_columns": len(df.columns),
+            "numeric_columns": len(numeric_stats)
+        },
+        "trends": []
+    }
+    
+    return insights_layout, analysis_data 
