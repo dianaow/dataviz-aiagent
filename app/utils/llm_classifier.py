@@ -257,6 +257,16 @@ def create_column_confirmation_dialog(matches, data_type, chat_history=None):
     if chat_history is None:
         chat_history = []
     print(f"Matches: {matches}")
+    
+    # Convert matches to dictionary format if it's a list
+    if isinstance(matches, list):
+        matches = {
+            "required": matches,
+            "optional": [],
+            "missing": [],
+            "confidence": 1.0
+        }
+    
     # Create a container for the chat messages
     chat_container = html.Div([
         # Confirmation button container
@@ -271,29 +281,31 @@ def create_column_confirmation_dialog(matches, data_type, chat_history=None):
                 html.Div([
                     html.Div([
                         html.P(message["content"], className="mb-0"),
+                        # Only show matches in the latest assistant message
                         html.Div([
                             "Here is the data type I found: ",
                             html.Strong(data_type)
                         ], className="mb-2"),
-                        html.P("Here are the column matches I found:", className="mb-2"),
                         html.Div([
+                            html.P("Here are the column matches I found:", className="mb-2"),
                             html.Strong("Required columns:", className="d-block mb-2"),
                             html.Ul([
-                                html.Li(f"{match.get('old_column', 'Unknown')}: {match.get('new_column', 'Unknown')} "
-                                      f"(Confidence: {match.get('confidence', 0):.0%})")
-                                for match in matches.get("required", [])
+                                html.Li(f"{match['old_column']}: {match['new_column']} "
+                                      f"(Confidence: {match['confidence']:.0%})")
+                                for match in matches["required"]
                             ], className="mb-3"),
-                            html.Strong("Optional columns:", className="d-block mb-2") if matches.get("optional") else None,
+                            html.Strong("Optional columns:", className="d-block mb-2"),
                             html.Ul([
-                                html.Li(f"{match.get('old_column', 'Unknown')}: {match.get('new_column', 'Unknown')} "
-                                      f"(Confidence: {match.get('confidence', 0):.0%})")
-                                for match in matches.get("optional", [])
+                                html.Li(f"{match['old_column']}: {match['new_column']} "
+                                      f"(Confidence: {match['confidence']:.0%})")
+                                for match in matches["optional"]
                             ], className="mb-3"),
-                            html.Strong("Missing required columns:", className="d-block mb-2") if matches.get("missing") else None,
+                            html.Strong("Missing required columns:", className="d-block mb-2"),
                             html.Ul([
-                                html.Li(missing) for missing in matches.get("missing", [])
-                            ]) if matches.get("missing") else None
-                        ], className="column-matches-content") if matches else None,
+                                html.Li(missing) for missing in matches["missing"]
+                            ])
+                        ], className="column-matches-content")
+                        if message["role"] == "assistant" and message == chat_history[-1] else None,
                         html.Small(message.get("timestamp", ""), className="text-muted d-block mt-1")
                     ], className="chat-bubble assistant-bubble p-3 rounded-3")
                 ], className="chat-message assistant-message mb-3") if message["role"] == "assistant"
@@ -327,41 +339,101 @@ def create_column_confirmation_dialog(matches, data_type, chat_history=None):
 def process_user_feedback(feedback, current_matches, data_type):
     """Process user feedback and update column matches."""
     try:
-        # Create a summary of the current state
-        current_state = {
-            "data_type": data_type,
-            "current_matches": current_matches,
-            "user_feedback": feedback
-        }
+        # Convert current_matches to dictionary format if it's a list
+        if isinstance(current_matches, list):
+            current_matches = {
+                "required": current_matches,
+                "optional": [],
+                "missing": [],
+                "confidence": 1.0
+            }
         
         # Prepare the prompt for Gemini
-        prompt = f"""Your task is to process user feedback about data classification, column matches and suggest corrections.
-        If the user indicates a specific data type or column should be used, update the matches accordingly.
-        
-        Current state: {json.dumps(current_state, indent=2)}
-        
-        Respond with a JSON object containing:
-        - updated_data_type: updated data type
-        - updated_matches: list of updated column matches
-        - explanation: explanation of the changes made
-        - needs_confirmation: boolean indicating if further confirmation is needed"""
+        prompt = f"""You are a data analysis assistant. Your task is to process user feedback about data classification and column matches.
+
+Current state:
+- Data type: {data_type}
+- Current column matches: {json.dumps(current_matches, indent=2)}
+- User feedback: {feedback}
+
+Please analyze the feedback and provide a response in the following JSON format:
+{{
+    "updated_data_type": "string (updated data type if changed)",
+    "updated_matches": {{
+        "required": [list of required column matches],
+        "optional": [list of optional column matches],
+        "missing": [list of missing required columns],
+        "confidence": number between 0 and 1
+    }},
+    "explanation": "string (explanation of changes made)",
+    "needs_confirmation": boolean
+}}
+
+IMPORTANT: 
+1. Your response must be a valid JSON object
+2. Do not include any text before or after the JSON object
+3. The JSON object must start with {{ and end with }}
+4. All strings must be properly quoted
+5. Boolean values must be true or false (lowercase)
+
+Example response:
+{{
+    "updated_data_type": "Battery Cycling Data",
+    "updated_matches": {{
+        "required": [
+            {{"old_column": "Cycle", "new_column": "Cycle Number", "confidence": 1.0}}
+        ],
+        "optional": [],
+        "missing": [],
+        "confidence": 1.0
+    }},
+    "explanation": "Updated the cycle column name based on user feedback",
+    "needs_confirmation": true
+}}
+"""
         
         # Call Gemini API
         response = model.generate_content(prompt)
+        print(f"Raw LLM response: {response.text}")
         
-        # Parse the response
-        result = json.loads(response.text)
+        # Clean the response text
+        response_text = response.text.strip()
+        
+        # Find the first { and last } to extract the JSON object
+        start_idx = response_text.find('{')
+        end_idx = response_text.rfind('}')
+        
+        if start_idx == -1 or end_idx == -1:
+            raise ValueError("No JSON object found in response")
+            
+        json_str = response_text[start_idx:end_idx+1]
+        print(f"Extracted JSON string: {json_str}")
+        
+        # Parse the JSON
+        result = json.loads(json_str)
+        
+        # Ensure updated_matches is in the correct format
+        updated_matches = result.get("updated_matches", current_matches)
+        if isinstance(updated_matches, list):
+            updated_matches = {
+                "required": updated_matches,
+                "optional": [],
+                "missing": [],
+                "confidence": 1.0
+            }
         
         return {
             "updated_data_type": result.get("updated_data_type", data_type),
-            "updated_matches": result.get("updated_matches", current_matches),
+            "updated_matches": updated_matches,
             "explanation": result.get("explanation", ""),
             "needs_confirmation": result.get("needs_confirmation", True)
         }
         
     except Exception as e:
         print(f"Error processing user feedback: {e}")
+        print(f"Response text that failed to parse: {response.text if 'response' in locals() else 'No response'}")
         return {
+            "updated_data_type": data_type,
             "updated_matches": current_matches,
             "explanation": "Sorry, I couldn't process your feedback. Please try again.",
             "needs_confirmation": True

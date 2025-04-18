@@ -24,29 +24,72 @@ def register_callbacks(app):
         [
             Output("upload-status", "children"),
             Output("processed-data", "data"),
+            Output("sheet-selection-container", "style"),
+            Output("sheet-selection-dropdown", "options"),
+            Output("sheet-selection-dropdown", "value"),
         ],
         [Input("upload-data", "contents")],
         [State("upload-data", "filename")]
     )
     def update_upload_status(contents, filename):
         if contents is None:
-            return html.P("No file uploaded", className="text-muted"), None
+            return (
+                html.P("No file uploaded", className="text-muted"),
+                None,
+                {"display": "none"},
+                [],
+                None
+            )
         
         try:
             # Parse the uploaded file
-            df = parse_contents(contents, filename)
-            if df is None:
-                return html.P("Error processing file: Could not parse the file contents", className="text-danger"), None
-            return (
-                html.P(f"File uploaded: {filename}", className="text-success"),
-                df.to_json(date_format='iso', orient='split')
-            )
+            result = parse_contents(contents, filename)
+            
+            if result is None:
+                return (
+                    html.P("Error processing file: Could not parse the file contents", className="text-danger"),
+                    None,
+                    {"display": "none"},
+                    [],
+                    None
+                )
+            
+            # Handle multiple data tabs
+            if isinstance(result, dict):
+                # Create dropdown options for sheet selection
+                options = [{"label": sheet_name, "value": sheet_name} for sheet_name in result.keys()]
+                
+                return (
+                    html.P(f"File uploaded: {filename}. Please select a sheet to process.", className="text-success"),
+                    None,
+                    {"display": "block"},
+                    options,
+                    None
+                )
+            else:
+                # Single DataFrame case
+                return (
+                    html.P(f"File uploaded: {filename}", className="text-success"),
+                    result.to_json(date_format='iso', orient='split'),
+                    {"display": "none"},
+                    [],
+                    None
+                )
+                
         except Exception as e:
-            return html.P(f"Error processing file: {str(e)}", className="text-danger"), None
+            return (
+                html.P(f"Error processing file: {str(e)}", className="text-danger"),
+                None,
+                {"display": "none"},
+                [],
+                None
+            )
 
-    # Callback for data classification
+    # Combined callback for sheet selection and data classification
     @app.callback(
         [
+            Output("processed-data", "data", allow_duplicate=True),
+            Output("sheet-selection-container", "style", allow_duplicate=True),
             Output("data-classification-output", "children"),
             Output("chat-history", "data"),
             Output("data-type", "data"),
@@ -54,48 +97,100 @@ def register_callbacks(app):
         ],
         [Input("process-button", "n_clicks")],
         [
-            State("processed-data", "data"),
-            State("data-type-hint", "value"),
+            State("sheet-selection-dropdown", "value"),
+            State("upload-data", "contents"),
             State("upload-data", "filename"),
-        ]
+            State("data-type-hint", "value")
+        ],
+        prevent_initial_call=True
     )
-    def classify_and_summarize(n_clicks, json_data, data_type_hint, filename):
-        if n_clicks is None or json_data is None:
-            return (
-                html.P("Upload and process data to see classification results", className="text-muted"),
-                [],
-                [],
-                [],
+    def process_and_classify_data(n_clicks, selected_sheet, contents, filename, data_type_hint):
+        if n_clicks is None:
+            return None, {"display": "none"}, None, [], None, None
+        
+        try:
+            # Parse the file
+            result = parse_contents(contents, filename)
+            
+            if result is None:
+                return (
+                    None,
+                    {"display": "none"},
+                    html.P("Error: Could not parse the file contents", className="text-danger"),
+                    [],
+                    None,
+                    None
+                )
+            
+            # Handle sheet selection
+            if isinstance(result, dict):
+                if selected_sheet is None:
+                    return (
+                        None,
+                        {"display": "block"},
+                        html.P("Please select a sheet to process", className="text-warning"),
+                        [],
+                        None,
+                        None
+                    )
+                
+                if selected_sheet not in result:
+                    return (
+                        None,
+                        {"display": "none"},
+                        html.P("Error: Selected sheet not found", className="text-danger"),
+                        [],
+                        None,
+                        None
+                    )
+                
+                # Get the selected sheet's data
+                df = result[selected_sheet]
+            else:
+                # Single DataFrame case
+                df = result
+            print('DataFrame', df.head())
+            # Convert DataFrame to JSON for storage
+            json_data = df.to_json(date_format='iso', orient='split')
+            
+            # Classify the data
+            data_type, confidence, column_matches, needs_confirmation = classify_data(df, data_type_hint, filename)
+            
+            # Initialize chat history
+            current_time = pd.Timestamp.now().strftime("%H:%M:%S")
+            chat_history = [{
+                "role": "assistant",
+                "content": f"I've analyzed your data and classified it as: {data_type} (Confidence: {confidence:.0%})",
+                "timestamp": current_time
+            }]
+            
+            # Create classification output
+            classification_output = create_column_confirmation_dialog(
+                column_matches,
+                data_type,
+                chat_history
             )
-        
-        # Parse the JSON data back to a DataFrame
-        df = pd.read_json(json_data, orient='split')
-        
-        # Classify the data type using the LLM
-        data_type, confidence, column_matches, needs_confirmation = classify_data(df, data_type_hint, filename)
-         
-        # Initialize chat history with the classification results
-        current_time = pd.Timestamp.now().strftime("%H:%M:%S")
-        chat_history = [{
-            "role": "assistant",
-            "content": f"I've analyzed your data and classified it as: {data_type} (Confidence: {confidence:.0%})",
-            "timestamp": current_time
-        }]
-        
-        # Create the chatbot-style dialog with data summary
-        classification_output = create_column_confirmation_dialog(
-            column_matches, 
-            data_type, 
-            chat_history
-        )
+            
+            return (
+                json_data,
+                {"display": "none"},
+                classification_output,
+                chat_history,
+                data_type,
+                column_matches
+            )
+            
+        except Exception as e:
+            print(f"Error processing and classifying data: {str(e)}")
+            return (
+                None,
+                {"display": "none"},
+                html.P(f"Error: {str(e)}", className="text-danger"),
+                [],
+                None,
+                None
+            )
 
-        return (
-            classification_output,
-            chat_history,
-            data_type,
-            column_matches
-        )
-    
     # Callback for handling chatbot interactions between user and assistant
     @app.callback(
         [

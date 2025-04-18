@@ -1,4 +1,4 @@
 .env
 /venv
-/data
+/app/data
 .DS_Store

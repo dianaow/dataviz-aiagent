@@ -33,6 +33,10 @@ def create_layout():
                                 multiple=False
                             ),
                             html.Div(id='upload-status'),
+                            html.Div([
+                            html.H4("Select Sheet", className="mb-3"),
+                            dcc.Dropdown(id='sheet-selection-dropdown'),
+                        ], id='sheet-selection-container', style={'display': 'none'}, className="card p-3 mb-4"),                           
                         ], className="mb-3"),
                         
                         # Data Type Hint Input
