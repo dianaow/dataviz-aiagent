@@ -4,7 +4,20 @@ import plotly.graph_objects as go
 import plotly.express as px
 from scipy.signal import find_peaks
 from scipy import optimize
+import google.generativeai as genai
+import json
+import os
+from dotenv import load_dotenv
+import dash.html as html
 
+# Load environment variables
+load_dotenv()
+
+# Configure Gemini
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+
+# Initialize Gemini model
+model = genai.GenerativeModel('gemini-2.0-flash')
 
 def generate_visualizations(df, data_type, plot_type=None):
     """
@@ -574,4 +587,169 @@ def default_figure(message):
         yaxis=dict(showgrid=False, zeroline=False, showticklabels=False)
     )
     
-    return fig 
+    return fig
+
+
+def generate_llm_visualizations(df, data_type, error_message=None):
+    """
+    Generate multiple visualization options using LLM with fallback to rule-based visualization.
+    
+    Args:
+        df (pd.DataFrame): The data to visualize
+        data_type (str): The type of data (e.g., "Battery Cycling Data")
+        error_message (str, optional): Error message from previous attempt
+        
+    Returns:
+        list: List of Plotly figures
+    """
+    try:
+        # Create a sample of the data
+        data_sample = df.copy()
+        for col in data_sample.columns:
+            if pd.api.types.is_datetime64_any_dtype(data_sample[col]):
+                data_sample[col] = data_sample[col].dt.strftime('%Y-%m-%d %H:%M:%S')
+        data_sample = data_sample.head(5).to_dict(orient='records')
+        
+        # Prepare the prompt for Gemini
+        prompt = f"""You are an expert in data visualization and materials science.
+        Your task is to generate multiple Plotly visualization options for the provided data.
+        
+        Data type: {data_type}
+        Available columns: {df.columns.tolist()}
+        Data sample: {json.dumps(data_sample, indent=2)}
+        
+        {f'Previous error: {error_message}' if error_message else ''}
+        
+        Generate multiple visualization options that would be useful for this data type.
+
+        IMPORTANT: Respond with ONLY a JSON object containing the visualization options.
+        Do not include any other text or explanations.
+
+        For the x and y attributes, specify the column names from the available columns list. 
+        Perform any necessary calculations and create new columns if needed to plot the data.
+        Do not include the actual data arrays.
+
+        The response should be in this exact format:
+        {{
+            "visualization_options": [
+                {{
+                    "name": "Descriptive Name 1",
+                    "description": "Brief description of this visualization",
+                    "figure_spec": {{
+                        "data": [
+                            {{
+                                "type": "scatter",
+                                "x": "column_name_for_x",
+                                "y": "column_name_for_y",
+                                "mode": "lines",
+                                "name": "Data"
+                            }}
+                        ],
+                        "layout": {{
+                            "title": "Plot Title",
+                            "xaxis": {{"title": "X Axis"}},
+                            "yaxis": {{"title": "Y Axis"}},
+                            "template": "plotly_white"
+                        }}
+                    }}
+                }},
+                {{
+                    "name": "Descriptive Name 2",
+                    "description": "Brief description of this visualization",
+                    "figure_spec": {{...}}
+                }}
+            ]
+        }}
+        
+        Use the following Plotly components:
+        - go.Figure() for creating figures
+        - go.Scatter() for line/scatter plots
+        - go.Bar() for bar plots
+        - go.Histogram() for histograms
+        - go.Box() for box plots
+        - go.Heatmap() for correlation matrices
+        
+        Make sure to:
+        1. Generate 3-5 different visualization options
+        2. Use appropriate axis labels and titles
+        3. Include legends
+        4. Use the 'plotly_white' template
+        5. Handle missing data appropriately
+        6. Use appropriate colors and markers
+        """
+        
+        # Call Gemini API
+        response = model.generate_content(prompt)
+        
+        # Print the raw response for debugging
+        print("Raw LLM response:", response.text)
+        
+        try:
+            # Clean the response text to ensure it's valid JSON
+            response_text = response.text.strip()
+            # Remove any markdown code block markers if present
+            if response_text.startswith('```json'):
+                response_text = response_text[7:]
+            if response_text.endswith('```'):
+                response_text = response_text[:-3]
+            response_text = response_text.strip()
+            
+            # Parse the response
+            result = json.loads(response_text)
+            
+            # Validate the result structure
+            if not isinstance(result, dict) or "visualization_options" not in result:
+                raise ValueError("Response missing required 'visualization_options' key")
+            
+            # Create figures for each visualization option
+            figures = []
+            for option in result["visualization_options"]:
+                # Create the figure with actual data from DataFrame
+                fig = go.Figure()
+                
+                # Add traces using column names
+                for trace in option["figure_spec"]["data"]:
+                    # Create a copy of the trace specification
+                    trace_spec = trace.copy()
+                    
+                    # Replace column names with actual data
+                    if "x" in trace_spec and isinstance(trace_spec["x"], str):
+                        trace_spec["x"] = df[trace_spec["x"]]
+                    if "y" in trace_spec and isinstance(trace_spec["y"], str):
+                        trace_spec["y"] = df[trace_spec["y"]]
+                    
+                    # Add the trace to the figure
+                    fig.add_trace(go.Scatter(**trace_spec))
+                
+                # Set the layout
+                fig.update_layout(**option["figure_spec"]["layout"])
+                
+                # Add the figure to the list
+                figures.append(fig)
+            
+            return figures
+            
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            print(f"Error parsing LLM response: {e}")
+            print("Cleaned response text:", response_text)
+            if not error_message:  # Only retry once
+                return generate_llm_visualizations(df, data_type, str(e))
+            else:
+                # Fallback to rule-based visualization
+                primary_fig, secondary_fig = generate_visualizations(df, data_type)
+                figures = [primary_fig]
+                if secondary_fig:
+                    figures.append(secondary_fig)
+                return figures
+                
+    except Exception as e:
+        print(f"Error in LLM visualization generation: {e}")
+        if not error_message:  # Only retry once
+            return generate_llm_visualizations(df, data_type, str(e))
+        else:
+            # Fallback to rule-based visualization
+            primary_fig, secondary_fig = generate_visualizations(df, data_type)
+            figures = [primary_fig]
+            if secondary_fig:
+                figures.append(secondary_fig)
+            return figures 
