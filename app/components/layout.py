@@ -127,6 +127,7 @@ def create_layout():
         ]),
 
         # Store components for intermediate data
+        dcc.Store(id="parsed-data"),
         dcc.Store(id="processed-data"),
         dcc.Store(id="data-type"),
         dcc.Store(id="analysis-output"),

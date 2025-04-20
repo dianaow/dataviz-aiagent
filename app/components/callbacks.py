@@ -23,7 +23,7 @@ def register_callbacks(app):
     @app.callback(
         [
             Output("upload-status", "children"),
-            Output("processed-data", "data"),
+            Output("parsed-data", "data"),
             Output("sheet-selection-container", "style"),
             Output("sheet-selection-dropdown", "options"),
             Output("sheet-selection-dropdown", "value"),
@@ -56,21 +56,25 @@ def register_callbacks(app):
             
             # Handle multiple data tabs
             if isinstance(result, dict):
+                # Convert JSON strings back to DataFrames for processing
+                dataframes = {sheet_name: pd.read_json(json_str, orient='split') 
+                            for sheet_name, json_str in result.items()}
+                
                 # Create dropdown options for sheet selection
-                options = [{"label": sheet_name, "value": sheet_name} for sheet_name in result.keys()]
+                options = [{"label": sheet_name, "value": sheet_name} for sheet_name in dataframes.keys()]
                 
                 return (
                     html.P(f"File uploaded: {filename}. Please select a sheet to process.", className="text-success"),
-                    None,
+                    result,
                     {"display": "block"},
                     options,
                     None
                 )
             else:
-                # Single DataFrame case
+                # Single DataFrame case (already in JSON format)
                 return (
                     html.P(f"File uploaded: {filename}", className="text-success"),
-                    result.to_json(date_format='iso', orient='split'),
+                    result,
                     {"display": "none"},
                     [],
                     None
@@ -98,30 +102,17 @@ def register_callbacks(app):
         [Input("process-button", "n_clicks")],
         [
             State("sheet-selection-dropdown", "value"),
-            State("upload-data", "contents"),
+            State("parsed-data", "data"),
             State("upload-data", "filename"),
             State("data-type-hint", "value")
         ],
         prevent_initial_call=True
     )
-    def process_and_classify_data(n_clicks, selected_sheet, contents, filename, data_type_hint):
+    def process_and_classify_data(n_clicks, selected_sheet, result, filename, data_type_hint):
         if n_clicks is None:
             return None, {"display": "none"}, None, [], None, None
         
         try:
-            # Parse the file
-            result = parse_contents(contents, filename)
-            
-            if result is None:
-                return (
-                    None,
-                    {"display": "none"},
-                    html.P("Error: Could not parse the file contents", className="text-danger"),
-                    [],
-                    None,
-                    None
-                )
-            
             # Handle sheet selection
             if isinstance(result, dict):
                 if selected_sheet is None:
@@ -144,15 +135,15 @@ def register_callbacks(app):
                         None
                     )
                 
-                # Get the selected sheet's data
-                df = result[selected_sheet]
+                # Get the selected sheet's data (already in JSON format)
+                json_data = result[selected_sheet]
             else:
-                # Single DataFrame case
-                df = result
-            print('DataFrame', df.head())
-            # Convert DataFrame to JSON for storage
-            json_data = df.to_json(date_format='iso', orient='split')
-            
+                # Single DataFrame case (already in JSON format)
+                json_data = result
+
+            # Convert JSON to DataFrame for processing
+            df = pd.read_json(json_data, orient='split')
+
             # Classify the data
             data_type, confidence, column_matches, needs_confirmation = classify_data(df, data_type_hint, filename)
             
@@ -172,7 +163,7 @@ def register_callbacks(app):
             )
             
             return (
-                json_data,
+                json_data,  # Return the original JSON data
                 {"display": "none"},
                 classification_output,
                 chat_history,
