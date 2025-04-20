@@ -4,6 +4,8 @@ An AI-driven tool for analyzing, visualizing, and interpreting materials metrolo
 
 ## Features
 
+- **Intelligent Data Analysis**: Uses AI to analyze and clean uploaded data files, automatically identifying and removing metadata rows
+- **Smart Excel Processing**: Automatically detects which Excel sheets contain actual data versus metadata, and processes only the relevant sheets
 - **Automated Data Classification**: Uses AI to identify the type of metrology data (battery cycling, XRD, Raman spectroscopy, etc.)
 - **Specialized Visualizations**: Generates context-specific plots based on the data type
 - **Advanced Analysis**: Performs peak fitting, capacity retention calculations, and other analytical procedures
@@ -60,10 +62,15 @@ An AI-driven tool for analyzing, visualizing, and interpreting materials metrolo
 ## Data Flow
 
 1. **Data Ingestion**: Upload a CSV, Excel, or text file
-2. **Data Classification**: AI identifies the type of metrology data
-3. **Data Processing**: The system performs type-specific data cleaning and preparation
-4. **Visualization**: Interactive plots are generated based on the data type
-5. **Analysis**: The system performs peak fitting, calculates key metrics, and provides insights
+2. **Intelligent Data Cleaning**: 
+   - Automatically identifies and removes metadata rows
+   - For Excel files, detects which sheets contain actual data
+   - Cleans and standardizes column headers
+   - Handles missing values and data type conversions
+3. **Data Classification**: AI identifies the type of metrology data
+4. **Data Processing**: The system performs type-specific data cleaning and preparation
+5. **Visualization**: Interactive plots are generated based on the data type
+6. **Analysis**: The system performs peak fitting, calculates key metrics, and provides insights
 
 ## Examples
 
